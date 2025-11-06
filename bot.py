@@ -575,4 +575,162 @@ async def on_vip_plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     cfg = get_config()
-    await q.edit_message_text("👑 VIP Plans:", reply_mark
+    await q.edit_message_text("👑 VIP Plans:", reply_markup=vip_menu(cfg))
+
+async def _send_vip_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE, tier: str):
+    q = update.callback_query
+    await q.answer()
+    cfg = get_config()
+    costs = cfg.get("vipCosts", {})
+    amount_xtr = safe_int(costs.get(tier, 0), 0)
+    if amount_xtr <= 0:
+        await q.edit_message_text("VIP plan unavailable right now.")
+        return
+
+    title = f"{tier.upper()} VIP"
+    desc = f"Unlock {tier.upper()} VIP benefits. Multiplier ×{cfg.get('vipMultipliers',{}).get(tier,1)}"
+    payload = f"VIP::{tier}"
+    currency = "XTR"  # Telegram Stars
+    prices = [LabeledPrice(label=title, amount=amount_xtr)]  # amount in XTR (stars)
+
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title=title,
+        description=desc,
+        payload=payload,
+        provider_token="",  # not required for Stars
+        currency=currency,
+        prices=prices,
+        protect_content=True,
+    )
+
+async def on_vip1_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _send_vip_invoice(update, context, "vip1")
+
+async def on_vip2_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _send_vip_invoice(update, context, "vip2")
+
+async def on_vip3_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _send_vip_invoice(update, context, "vip3")
+
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    # For Stars, we simply approve
+    await query.answer(ok=True)
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    sp = msg.successful_payment
+    payload = sp.invoice_payload  # "VIP::vip1"
+    tier = None
+    if payload and payload.startswith("VIP::"):
+        tier = payload.split("::", 1)[1]
+
+    if not tier:
+        await msg.reply_text("Payment received, but could not assign VIP. Contact support.")
+        return
+
+    uid = update.effective_user.id
+    update_user(uid, {"vipTier": tier, "vipActivatedAt": firestore.SERVER_TIMESTAMP})
+    await msg.reply_text(
+        f"🎉 VIP upgraded to *{tier.upper()}*! Enjoy boosted rewards.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu(),
+    )
+
+# ------------- Stats -------------
+async def on_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    user = get_user(update.effective_user.id)
+    if not user:
+        await q.edit_message_text("Please /start first.")
+        return
+
+    refs = count_referrals(user["id"])
+    text = (
+        "📊 *Your Stats*\n\n"
+        f"Referrals: *{refs}*\n"
+        f"Ads Watched: *{user.get('adsWatched',0)}*\n"
+        f"Coins: *{user.get('coins',0)}*\n"
+        f"VIP Tier: *{user.get('vipTier','none').upper()}*\n"
+        f"Total Withdrawals: *{user.get('totalWithdrawals',0)}*"
+    )
+    await q.edit_message_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_extra")]]),
+    )
+
+# ------------- Support -------------
+async def on_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    cfg = get_config()
+    link = cfg.get("supportBot") or "https://t.me/"
+    await q.edit_message_text(
+        "🆘 Need help? Tap Support:",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("Open Support", url=link)],
+                [InlineKeyboardButton("⬅️ Back", callback_data="back_extra")],
+            ]
+        ),
+    )
+
+# ------------- Unknown Text (helper to keep UX clean) -------------
+async def fallback_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text("Use the menu below:", reply_markup=main_menu())
+
+# ----------------- App Setup -----------------
+def build_application():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Commands
+    app.add_handler(CommandHandler("start", start))
+
+    # Withdraw conversation
+    withdraw_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_withdraw, pattern=f"^{CB_WITHDRAW}$")],
+        states={
+            ASK_UPI: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_upi)],
+            ASK_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_amount)],
+        },
+        fallbacks=[CommandHandler("cancel", withdraw_cancel)],
+        allow_reentry=True,
+    )
+    app.add_handler(withdraw_conv)
+
+    # Callbacks
+    app.add_handler(CallbackQueryHandler(on_watch_ads, pattern=f"^{CB_WATCH_ADS}$"))
+    app.add_handler(CallbackQueryHandler(on_bonus, pattern=f"^{CB_BONUS}$"))
+    app.add_handler(CallbackQueryHandler(on_refer, pattern=f"^{CB_REFER}$"))
+    app.add_handler(CallbackQueryHandler(on_balance, pattern=f"^{CB_BALANCE}$"))
+    app.add_handler(CallbackQueryHandler(on_extra, pattern=f"^{CB_EXTRA}$"))
+    app.add_handler(CallbackQueryHandler(on_vip_plans, pattern=f"^{CB_VIP_PLANS}$"))
+    app.add_handler(CallbackQueryHandler(on_stats, pattern=f"^{CB_STATS}$"))
+    app.add_handler(CallbackQueryHandler(on_support, pattern=f"^{CB_SUPPORT}$"))
+    app.add_handler(CallbackQueryHandler(back_to_main, pattern="^back_main$"))
+    app.add_handler(CallbackQueryHandler(back_to_extra, pattern="^back_extra$"))
+
+    # VIP invoices (Telegram Stars)
+    app.add_handler(CallbackQueryHandler(on_vip1_buy, pattern=f"^{CB_VIP1_BUY}$"))
+    app.add_handler(CallbackQueryHandler(on_vip2_buy, pattern=f"^{CB_VIP2_BUY}$"))
+    app.add_handler(CallbackQueryHandler(on_vip3_buy, pattern=f"^{CB_VIP3_BUY}$"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
+
+    # Fallback
+    app.add_handler(MessageHandler(filters.COMMAND, fallback_text))
+    app.add_handler(MessageHandler(filters.ALL, fallback_text))
+
+    return app
+
+def main():
+    app = build_application()
+    logger.info("Bot is starting...")
+    app.run_polling(close_loop=False)
+
+if __name__ == "__main__":
+    main()
