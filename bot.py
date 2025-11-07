@@ -62,7 +62,6 @@ if not BOT_TOKEN or not FIREBASE_CRED_PATH:
 # ----------------- Firebase Admin --------------
 import firebase_admin
 from firebase_admin import credentials, firestore
-from google.cloud.firestore import FieldValue
 
 # Initialize Firebase using service account credentials
 cred = credentials.Certificate(FIREBASE_CRED_PATH)
@@ -70,6 +69,12 @@ firebase_admin.initialize_app(cred)
 
 # Firestore client
 db = firestore.client()
+
+# ✅ Firestore helper constants for latest API
+SERVER_TIMESTAMP = firestore.SERVER_TIMESTAMP
+ArrayUnion = firestore.ArrayUnion
+ArrayRemove = firestore.ArrayRemove
+Increment = firestore.Increment
 
 # ----------------- Constants -----------------
 CB_WATCH_ADS = "watch_ads"
@@ -162,10 +167,10 @@ def update_user(uid: int, data: dict) -> None:
     users_col().document(str(uid)).set(data, merge=True)
 
 def increment_user(uid: int, field: str, amount: int | float):
-    users_col().document(str(uid)).update({field: FieldValue.increment(amount)})
+    users_col().document(str(uid)).update({field: Increment(amount)})
 
 def set_server_ts(uid: int, field: str):
-    users_col().document(str(uid)).update({field: firestore.SERVER_TIMESTAMP})
+    users_col().document(str(uid)).update({field: SERVER_TIMESTAMP})
 
 def count_referrals(uid: int) -> int:
     # count users where refferBy == uid
