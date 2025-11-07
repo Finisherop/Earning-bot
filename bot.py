@@ -59,13 +59,16 @@ if not BOT_TOKEN or not FIREBASE_CRED_PATH:
         "Missing env vars. Ensure USER_BOT_TOKEN and FIREBASE_CRED_PATH are set in .env"
     )
 
-# ----------------- Firebase Admin -----------------
+# ----------------- Firebase Admin --------------
 import firebase_admin
 from firebase_admin import credentials, firestore
-from google.cloud.firestore import FieldValue  # type: ignore
+from google.cloud.firestore_v1 import FieldValue  # ✅ Correct import for latest Firestore
 
+# Initialize Firebase using service account credentials
 cred = credentials.Certificate(FIREBASE_CRED_PATH)
 firebase_admin.initialize_app(cred)
+
+# Firestore client
 db = firestore.client()
 
 # ----------------- Constants -----------------
